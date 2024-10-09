@@ -86,12 +86,49 @@ def _set_request_params(span, kwargs):
     _set_span_attribute(span, SpanAttributes.LLM_REQUEST_TOP_P, params.get("top_p"))
 
 
+def _get_client_HACK():
+    import traceback
+    import inspect
+
+    # Capture the current stack trace
+    stack = traceback.extract_stack()
+
+    # Inspect the frames to find the specific function
+    for frame_info in reversed(stack):
+        if frame_info.name == "generate":
+            # Get the frame object of the desired function
+            frame = inspect.currentframe()
+            while frame:
+                if frame.f_code.co_name == "generate":
+                    local_vars = frame.f_locals
+                    client = local_vars["self"].client
+                    return client
+                frame = frame.f_back
+            break
+    return None
+
+
+def _set_trace_context_to_client(span: Span):
+    from opentelemetry.trace.propagation.tracecontext import (
+        TraceContextTextMapPropagator,
+    )
+    from opentelemetry.trace.propagation import set_span_in_context
+
+    client = _get_client_HACK()
+
+    # TODO: Ensure that these injected custom headers are cleared after the request is sent to avoid unintended side effects.
+    custom_headers = client._client._custom_headers
+    ctx = set_span_in_context(span)
+    TraceContextTextMapPropagator().inject(custom_headers, context=ctx)
+
+
 def _set_llm_request(
     span: Span,
     serialized: dict[str, Any],
     prompts: list[str],
     kwargs: Any,
 ) -> None:
+    _set_trace_context_to_client(span)
     _set_request_params(span, kwargs)
 
     if should_send_prompts():
