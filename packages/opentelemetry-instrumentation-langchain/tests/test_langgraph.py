@@ -79,3 +79,28 @@ async def test_langgraph_ainvoke(exporter):
             "openai.chat"
         ]
     ) == set([span.name for span in spans])
+
+
+
+@pytest.mark.vcr
+def test_langgraph_double_invoke(exporter):
+    class DummyGraphState(TypedDict):
+        result: str
+
+    def mynode_func(state: DummyGraphState) -> DummyGraphState:
+        return state
+
+    def build_graph():
+        workflow = StateGraph(DummyGraphState)
+        workflow.add_node("mynode", mynode_func)
+        workflow.set_entry_point("mynode")
+        langgraph = workflow.compile()
+        return langgraph
+    
+    graph = build_graph()
+    from opentelemetry import trace
+    assert "test_langgraph_double_invoke" == trace.get_current_span().name
+    graph.invoke({"result": "init"})
+    assert "test_langgraph_double_invoke" == trace.get_current_span().name
+    graph.invoke({"result": "init"})
+    assert "test_langgraph_double_invoke" == trace.get_current_span().name

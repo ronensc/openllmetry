@@ -366,12 +366,14 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
     def _get_span(self, run_id: UUID) -> Span:
         return self.spans[run_id].span
 
-    def _end_span(self, span: Span, run_id: UUID) -> None:
+    def _end_span(self, span: Span, run_id: UUID, token=None) -> None:
         for child_id in self.spans[run_id].children:
             child_span = self.spans[child_id].span
             if child_span.end_time is None:  # avoid warning on ended spans
                 child_span.end()
         span.end()
+        if token:
+            context_api.detach(token)
 
     def _create_span(
         self,
@@ -573,7 +575,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
                 ),
             )
 
-        self._end_span(span, run_id)
+        self._end_span(span, run_id, span_holder.token)
 
     @dont_throw
     def on_chat_model_start(
@@ -697,7 +699,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
                 )
 
         _set_chat_response(span, response)
-        self._end_span(span, run_id)
+        self._end_span(span, run_id, self.spans[run_id].token)
 
         # Record duration
         duration = time.time() - self.spans[run_id].start_time
@@ -778,7 +780,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
                     cls=CallbackFilteredJSONEncoder,
                 ),
             )
-        self._end_span(span, run_id)
+        self._end_span(span, run_id, self.spans[run_id].token)
 
     def get_parent_span(self, parent_run_id: Optional[str] = None):
         if parent_run_id is None:
@@ -822,7 +824,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         span = self._get_span(run_id)
         span.set_status(Status(StatusCode.ERROR))
         span.record_exception(error)
-        self._end_span(span, run_id)
+        self._end_span(span, run_id, self.spans[run_id].token)
 
     @dont_throw
     def on_llm_error(
