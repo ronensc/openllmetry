@@ -21,6 +21,7 @@ from opentelemetry.trace.propagation import set_span_in_context
 
 from opentelemetry.instrumentation.langchain.callback_handler import (
     TraceloopCallbackHandler,
+    AsyncTraceloopCallbackHandler,
 )
 
 from opentelemetry.metrics import get_meter
@@ -202,19 +203,9 @@ class _BaseCallbackManagerInitWrapper:
             if isinstance(handler, type(self._callback_manager)):
                 break
         else:
+            if instance.is_async:
+                self._callback_manager = AsyncTraceloopCallbackHandler(self._callback_manager)
             instance.add_handler(self._callback_manager, True)
-            if isinstance(instance, (
-                    CallbackManager,
-                    CallbackManagerForChainGroup,
-                    CallbackManagerForChainRun,
-                    CallbackManagerForLLMRun,
-                    CallbackManagerForRetrieverRun,
-                    CallbackManagerForToolRun,
-                )
-            ):
-                if span and not self._callback_manager.spans[parent_run_id].token:
-                    token = context_api.attach(set_span_in_context(span))
-                    self._callback_manager.spans[parent_run_id].token = token
 
 
 # This class wraps a function call to inject tracing information (trace headers) into

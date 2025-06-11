@@ -386,6 +386,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         entity_name: str = "",
         entity_path: str = "",
         metadata: Optional[dict[str, Any]] = None,
+        is_async: bool = False,
     ) -> Span:
         if metadata is not None:
             current_association_properties = (
@@ -416,8 +417,12 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         _set_span_attribute(span, SpanAttributes.TRACELOOP_WORKFLOW_NAME, workflow_name)
         _set_span_attribute(span, SpanAttributes.TRACELOOP_ENTITY_PATH, entity_path)
 
+        token = None
+        if not is_async:
+            token = context_api.attach(set_span_in_context(span))
+
         self.spans[run_id] = SpanHolder(
-            span, None, None, [], workflow_name, entity_name, entity_path
+            span, token, None, [], workflow_name, entity_name, entity_path
         )
 
         if parent_run_id is not None and parent_run_id in self.spans:
@@ -435,6 +440,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         entity_name: str = "",
         entity_path: str = "",
         metadata: Optional[dict[str, Any]] = None,
+        is_async: bool = False,
     ) -> Span:
         span_name = f"{name}.{kind.value}"
         span = self._create_span(
@@ -445,6 +451,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
             entity_name=entity_name,
             entity_path=entity_path,
             metadata=metadata,
+            is_async=is_async,
         )
 
         _set_span_attribute(span, SpanAttributes.TRACELOOP_SPAN_KIND, kind.value)
@@ -459,6 +466,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         name: str,
         request_type: LLMRequestTypeValues,
         metadata: Optional[dict[str, Any]] = None,
+        is_async: bool = False,
     ) -> Span:
         workflow_name = self.get_workflow_name(parent_run_id)
         entity_path = self.get_entity_path(parent_run_id)
@@ -471,6 +479,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
             workflow_name=workflow_name,
             entity_path=entity_path,
             metadata=metadata,
+            is_async=is_async,
         )
         _set_span_attribute(span, SpanAttributes.LLM_SYSTEM, "Langchain")
         _set_span_attribute(span, SpanAttributes.LLM_REQUEST_TYPE, request_type.value)
@@ -497,6 +506,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         tags: Optional[list[str]] = None,
         metadata: Optional[dict[str, Any]] = None,
+        is_async: bool = False,
         **kwargs: Any,
     ) -> None:
         """Run when chain starts running."""
@@ -528,6 +538,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
             name,
             entity_path,
             metadata,
+            is_async=is_async,
         )
         if should_send_prompts():
             _set_span_attribute(
@@ -589,6 +600,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         tags: Optional[list[str]] = None,
         parent_run_id: Optional[UUID] = None,
         metadata: Optional[dict[str, Any]] = None,
+        is_async: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Run when Chat Model starts running."""
@@ -597,7 +609,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
 
         name = self._get_name_from_callback(serialized, kwargs=kwargs)
         span = self._create_llm_span(
-            run_id, parent_run_id, name, LLMRequestTypeValues.CHAT, metadata=metadata
+            run_id, parent_run_id, name, LLMRequestTypeValues.CHAT, metadata=metadata, is_async=is_async,
         )
         _set_chat_request(span, serialized, messages, kwargs, self.spans[run_id])
 
@@ -611,6 +623,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         tags: Optional[list[str]] = None,
         parent_run_id: Optional[UUID] = None,
         metadata: Optional[dict[str, Any]] = None,
+        is_async:bool = False,
         **kwargs: Any,
     ) -> Any:
         """Run when Chat Model starts running."""
@@ -619,7 +632,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
 
         name = self._get_name_from_callback(serialized, kwargs=kwargs)
         span = self._create_llm_span(
-            run_id, parent_run_id, name, LLMRequestTypeValues.COMPLETION
+            run_id, parent_run_id, name, LLMRequestTypeValues.COMPLETION, is_async=is_async,
         )
         _set_llm_request(span, serialized, prompts, kwargs, self.spans[run_id])
 
@@ -724,6 +737,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
         tags: Optional[list[str]] = None,
         metadata: Optional[dict[str, Any]] = None,
         inputs: Optional[dict[str, Any]] = None,
+        is_async: bool = False,
         **kwargs: Any,
     ) -> None:
         """Run when tool starts running."""
@@ -742,6 +756,7 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
             workflow_name,
             name,
             entity_path,
+            is_async=is_async,
         )
         if should_send_prompts():
             _set_span_attribute(
@@ -887,3 +902,159 @@ class TraceloopCallbackHandler(BaseCallbackHandler):
     ) -> None:
         """Run when retriever errors."""
         self._handle_error(error, run_id, parent_run_id, **kwargs)
+
+
+class AsyncTraceloopCallbackHandler(TraceloopCallbackHandler):
+    def __init__(self, handler):
+        super().__init__(
+            handler.tracer, handler.duration_histogram, handler.token_histogram
+        )
+        self.spans = handler.spans
+        self._sync_handler = handler
+    
+    
+    async def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[BaseMessage]],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run when a chat model starts running.
+
+        **ATTENTION**: This method is called for chat models. If you're implementing
+            a handler for a non-chat model, you should use on_llm_start instead.
+
+        Args:
+            serialized (dict[str, Any]): The serialized chat model.
+            messages (list[list[BaseMessage]]): The messages.
+            run_id (UUID): The run ID. This is the ID of the current run.
+            parent_run_id (UUID): The parent run ID. This is the ID of the parent run.
+            tags (Optional[list[str]]): The tags.
+            metadata (Optional[dict[str, Any]]): The metadata.
+            kwargs (Any): Additional keyword arguments.
+        """
+        super().on_chat_model_start(
+            is_async=True,
+            serialized=serialized,
+            messages=messages,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            **kwargs,
+        )
+
+
+    # @dont_throw
+    async def on_llm_start(
+        self,
+        serialized: dict[str, Any],
+        prompts: list[str],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Run when LLM starts running.
+
+        **ATTENTION**: This method is called for non-chat models (regular LLMs). If
+            you're implementing a handler for a chat model,
+            you should use on_chat_model_start instead.
+
+        Args:
+            serialized (dict[str, Any]): The serialized LLM.
+            prompts (list[str]): The prompts.
+            run_id (UUID): The run ID. This is the ID of the current run.
+            parent_run_id (UUID): The parent run ID. This is the ID of the parent run.
+            tags (Optional[list[str]]): The tags.
+            metadata (Optional[dict[str, Any]]): The metadata.
+            kwargs (Any): Additional keyword arguments.
+        """
+        super().on_llm_start(
+            is_async=True,
+            serialized=serialized,
+            prompts=prompts,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            **kwargs,
+        )
+
+    
+    # @dont_throw
+    async def on_chain_start(
+        self,
+        serialized: dict[str, Any],
+        inputs: dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Run when a chain starts running.
+
+        Args:
+            serialized (dict[str, Any]): The serialized chain.
+            inputs (dict[str, Any]): The inputs.
+            run_id (UUID): The run ID. This is the ID of the current run.
+            parent_run_id (UUID): The parent run ID. This is the ID of the parent run.
+            tags (Optional[list[str]]): The tags.
+            metadata (Optional[dict[str, Any]]): The metadata.
+            kwargs (Any): Additional keyword arguments.
+        """
+        super().on_chain_start(
+            is_async=True,
+            serialized=serialized,
+            inputs=inputs,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            **kwargs,
+        )
+
+    async def on_tool_start(
+        self,
+        serialized: dict[str, Any],
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        inputs: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Run when the tool starts running.
+
+        Args:
+            serialized (dict[str, Any]): The serialized tool.
+            input_str (str): The input string.
+            run_id (UUID): The run ID. This is the ID of the current run.
+            parent_run_id (UUID): The parent run ID. This is the ID of the parent run.
+            tags (Optional[list[str]]): The tags.
+            metadata (Optional[dict[str, Any]]): The metadata.
+            inputs (Optional[dict[str, Any]]): The inputs.
+            kwargs (Any): Additional keyword arguments.
+        """
+        super().on_tool_start(
+            is_async=True,
+            serialized=serialized,
+            input_str=input_str,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            inputs=inputs,
+            **kwargs,
+        )
