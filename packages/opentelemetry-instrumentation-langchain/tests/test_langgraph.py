@@ -1,3 +1,4 @@
+import json
 import pytest
 from openai import OpenAI
 from typing import TypedDict
@@ -340,6 +341,18 @@ def test_nesting_of_langgraph_spans(instrument_legacy, span_exporter, tracer_pro
     assert http_call_task_span.parent.span_id == workflow_span.context.span_id
     assert otel_span_task_span.parent.span_id == workflow_span.context.span_id
     assert workflow_span.parent.span_id == root_span.context.span_id
+
+    graph_structure = json.loads(workflow_span.attributes["graph_structure"])
+    expected_graph_structure = {
+        "nodes": ["http_call", "otel_span"],
+        "edges": [
+            [["__start__"], ["http_call"]],
+            [["http_call"], ["otel_span"]],
+            [["otel_span"], ["__end__"]],
+        ],
+    }
+    assert sorted(graph_structure["nodes"]) == sorted(expected_graph_structure["nodes"])
+    assert sorted(graph_structure["edges"]) == sorted(expected_graph_structure["edges"])
 
 
 def test_context_detachment_error_handling(
